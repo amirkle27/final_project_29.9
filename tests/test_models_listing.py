@@ -1,12 +1,10 @@
-# tests/test_models_listing.py
 import json, io
 
 def test_models_listing_costs_one_token(client, signup_and_login):
     headers, username = signup_and_login()
 
-    # יותר דגימות כדי למנוע r²=NaN כשיש דגימת Test בודדת
     rows = ["f1,f2,y"]
-    for i in range(20):  # במקום 3 שורות
+    for i in range(20): 
         rows.append(f"{i},{i+1},{2*i+1}")
     csv = ("\n".join(rows)).encode("utf-8")
 
@@ -19,3 +17,4 @@ def test_models_listing_costs_one_token(client, signup_and_login):
     assert r.status_code == 200
     models = r.json()["models"]
     assert isinstance(models, list) and len(models) >= 1
+
