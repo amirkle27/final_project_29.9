@@ -16,11 +16,12 @@ def test_spacy_basic_ents_and_tags():
     assert any(lbl in ("PERSON", "ORG") for lbl in labels)
     assert any(lbl in ("GPE", "LOC") for lbl in labels)
 
-    # בדיקת משפטים
+    # sentences test
     sents = s.get_sentences(text)
     assert len(sents) >= 2
 
-    # בדיקת תגיות דקדוקיות
+    # grammer tags test
     tags = s.get_tag_and_displacy(text, display_render=False)
     assert len(tags) > 0
+
 
