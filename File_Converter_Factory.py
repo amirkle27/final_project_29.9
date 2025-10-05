@@ -1,10 +1,5 @@
-
 from pathlib import Path
-
-
 from File_Converter import FileConverter, ExcelConverter, CSVConverter, JSONConverter
-
-
 
 class FileConverterFactory:
     @staticmethod
@@ -19,7 +14,3 @@ class FileConverterFactory:
             return JSONConverter()
         else:
             raise ValueError(f"Unsupported file type: {suffix}")
-
-
-
-
