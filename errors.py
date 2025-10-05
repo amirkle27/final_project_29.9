@@ -1,4 +1,3 @@
-# errors.py
 from __future__ import annotations
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -8,7 +7,6 @@ import logging
 
 logger = logging.getLogger("ml_server.errors")
 
-# errors.py — הוסף/י את זה (למעלה או למטה, לא משנה):
 class TargetColumnNotFoundError(Exception):
     def __init__(self, column_name: str):
         super().__init__(f"Target column '{column_name}' not found in dataframe.")
@@ -29,78 +27,66 @@ class NumericTargetRequiredError(Exception):
     def __init__(self):
         super().__init__("Linear Regression cannot be used for classification. Target must be numeric.")
 
-# --- Compat for older/newer modules expecting these names ---
-
 class TargetColumnNotFoundError(Exception):
     """Raised when the target/label column is missing from DataFrame."""
-
 
 class InvalidPenaltySolverCombination(Exception):
     """Raised when LogisticRegression penalty/solver combo is invalid."""
 
-
 class NotFittedError(Exception):
     """Raised when predict is called before fitting a model."""
-
 
 class MultipleFeaturesPolyError(Exception):
     """Raised when polynomial transform gets invalid feature spec."""
 
-
-# שימור כתיב שגוי 'Polinomial*' לצורך תאימות, + אליאס ל-Polynomial*
 class PolinomialMaxMinError(Exception):
     pass
-PolynomialMaxMinError = PolinomialMaxMinError  # alias
-
+PolynomialMaxMinError = PolinomialMaxMinError 
 
 class PolinomialNotDFError(Exception):
     pass
-PolynomialNotDFError = PolinomialNotDFError  # alias
-
+PolynomialNotDFError = PolinomialNotDFError  
 
 class PolinomialForClassificationError(Exception):
     pass
-PolynomialForClassificationError = PolinomialForClassificationError  # alias
-
+PolynomialForClassificationError = PolinomialForClassificationError  
 
 class LinearForClassificationError(Exception):
     """Raised if linear-regression flow is used for classification target."""
     pass
 
-# --- מודל תגובת שגיאה אחיד ל-API ---
 class ErrorResponse(BaseModel):
-    error_code: str          # קוד פנימי קצר ויציב, לדוג': AUTH_BAD_CREDENTIALS
-    message: str             # הודעה ידידותית למשתמש/מורה
-    details: Optional[dict] = None  # מידע משלים (לא חובה), לדוג': {"missing": ["age","salary"]}
+    error_code: str         
+    message: str            
+    details: Optional[dict] = None  
 
-# --- מאגר הודעות שגיאה (אפשר לתרגם/לשנות במקום אחד) ---
 MESSAGES = {
-    # אימות/הרשאות
-    "AUTH_BAD_CREDENTIALS": "שם משתמש או סיסמה שגויים.",
-    "AUTH_TOKEN_MISSING": "לא סופק טוקן.",
-    "AUTH_TOKEN_EXPIRED": "הטוקן פג תוקף.",
-    "AUTH_TOKEN_INVALID": "טוקן לא תקין.",
-    "AUTH_USER_NOT_FOUND": "משתמש לא נמצא.",
+    #  Authorization
+    "AUTH_BAD_CREDENTIALS": "Username or Password incorrect.",
+    "AUTH_TOKEN_MISSING": "No token provided.",
+    "AUTH_TOKEN_EXPIRED": "Token expired.",
+    "AUTH_TOKEN_INVALID": "Token invalid.",
+    "AUTH_USER_NOT_FOUND": "User not found.",
 
-    # טוקנים/תמחור
-    "TOKENS_NOT_ENOUGH": "אין מספיק טוקנים לביצוע הפעולה.",
+    # Tokens/Cost
+    "TOKENS_NOT_ENOUGH": "Tokens insufficient for the desired action.",
     "TOKENS_COST_INVALID": "העלות (cost) חייבת להיות מספר שלם חיובי.",
 
-    # קלט/פרמטרים/קבצים
-    "INPUT_INVALID_JSON": "שדה JSON לא תקין.",
-    "INPUT_MISSING_COLUMNS": "חסרות עמודות בקובץ הנתונים.",
-    "INPUT_FILE_UNSUPPORTED": "פורמט קובץ לא נתמך.",
-    "INPUT_MODEL_PARAMS_INVALID": "model_params חייב להיות אובייקט JSON (dict).",
+    # Input/Parameters/Files
+    "INPUT_INVALID_JSON": "JSON Field invalid.",
+    "INPUT_MISSING_COLUMNS": "Missing columns in DB.",
+    "INPUT_FILE_UNSUPPORTED": "Unsupported file format.",
+    "INPUT_MODEL_PARAMS_INVALID": "model_params must be a JSON object (dict).",
 
-    # מודלים
-    "MODEL_NOT_FOUND": "מודל לא נמצא.",
-    "MODEL_KIND_MISMATCH": "סוג המודל לא תואם לפעולה.",
-    "MODEL_TRAIN_FAILED": "אימון המודל נכשל.",
-    "MODEL_PREDICT_FAILED": "חיזוי נכשל.",
-    "MODEL_BUNDLE_CORRUPT": "קובץ המודל השמור פגום/חסר רכיב.",
+    # Models
+    "MODEL_NOT_FOUND": "Model not found.",
+    "MODEL_KIND_MISMATCH": "Model kind not suitable for this action.",
+    "MODEL_TRAIN_FAILED": "Model train failed.",
+    "MODEL_PREDICT_FAILED": "Model predict failed.",
+    "MODEL_BUNDLE_CORRUPT": "Model file corrupt/missing data.",
 
-    # כללי
-    "INTERNAL_ERROR": "שגיאה פנימית. נסה שוב מאוחר יותר.",
+    # General Error
+    "INTERNAL_ERROR": "Internal error. Please try later.",
 }
 
 # --- מחלקות חריגים אפליקטיביות (Business) ---
@@ -200,3 +186,4 @@ def http_error_code(code: str, status: HTTPStatus, details: Optional[dict] = Non
 def log_and_raise(exc: AppError) -> None:
     logger.warning(f"{exc.error_code}: {exc.message}; details={exc.details}")
     raise http_error(exc)
+
