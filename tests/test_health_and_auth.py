@@ -1,4 +1,3 @@
-# tests/test_health_and_auth.py
 def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200
@@ -10,3 +9,4 @@ def test_signup_login_flow(client):
     r = client.post("/login", json={"username": "alice", "password": "Ab!1234"})
     assert r.status_code == 200
     assert "access_token" in r.json()
+
