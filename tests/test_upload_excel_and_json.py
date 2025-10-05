@@ -1,4 +1,3 @@
-# tests/test_upload_excel_and_json.py
 import io, json
 import pandas as pd
 
@@ -11,7 +10,6 @@ def _make_excel_bytes(df: pd.DataFrame) -> bytes:
 def test_train_from_excel_and_predict(client, signup_and_login):
     headers, _ = signup_and_login()
 
-    # Excel regression data
     df = pd.DataFrame({"f1":[0,1,2,3,4,5], "f2":[1,2,3,4,5,6]})
     df["y"] = 3 + 1.2*df["f1"] + 0.8*df["f2"]
     xlsx_bytes = _make_excel_bytes(df)
@@ -29,7 +27,6 @@ def test_train_from_excel_and_predict(client, signup_and_login):
 def test_train_from_json_and_predict(client, signup_and_login):
     headers, _ = signup_and_login()
 
-    # JSON classification data
     rows = []
     for i in range(30):
         x1 = i % 20
@@ -47,3 +44,4 @@ def test_train_from_json_and_predict(client, signup_and_login):
     r = client.post(f"/predict/by_id/{model_id}", headers=headers, data={"data": json.dumps({"x1": 5, "x2": 9})})
     assert r.status_code == 200
     assert "prediction" in r.json()
+
