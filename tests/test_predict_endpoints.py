@@ -1,10 +1,8 @@
-# tests/test_predict_endpoints.py
 import json
 import io
 import random
 
 def _make_classification_csv():
-    # בעיה בינארית פשוטה: size = "S" אם x1+x2 < סף, אחרת "M"
     rows = ["x1,x2,size"]
     for i in range(60):
         x1 = random.randint(0, 20)
@@ -26,7 +24,6 @@ def test_predict_classification(client, signup_and_login):
     headers, _ = signup_and_login()
     csv_bytes = _make_classification_csv()
     files = {"file": ("toy_cls.csv", io.BytesIO(csv_bytes), "text/csv")}
-    # מודל ברירת מחדל: logreg (ע"פ השרת)
     r = client.post(
         "/predict/classification",
         headers=headers,
@@ -60,3 +57,4 @@ def test_predict_regression(client, signup_and_login):
     body = r.json()
     assert "prediction" in body
     assert "metrics" in body and {"mse", "rmse", "r2"} <= set(body["metrics"].keys())
+
