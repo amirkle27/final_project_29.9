@@ -1,4 +1,3 @@
-# dal.py
 import sqlite3
 from datetime import datetime
 import json
@@ -19,7 +18,7 @@ def init_db():
                     tokens INTEGER NOT NULL,
                     joined_at TEXT NOT NULL,
                     usage_count INTEGER NOT NULL
-                )
+                    )
                 """)
         conn.commit()
         db.execute("""
@@ -175,3 +174,4 @@ def update_tokens_and_log(username: str, cost: int, action: str, model_name: str
         conn.commit()
 
     return new_tokens
+
