@@ -1,4 +1,3 @@
-# tests/test_spacy_nlp.py
 import pytest
 
 def test_spacy_basic_ents_and_tags():
@@ -13,7 +12,6 @@ def test_spacy_basic_ents_and_tags():
 
     text = "Barack Obama visited Paris in 2015. Apple unveiled a new iPhone in California."
     ents = s.get_ents(text)
-    # מצפה שיהיה לפחות אדם ומקום (ייתכן שינויי מודל קטנים, לכן בודק חלקית)
     labels = [lbl for _, lbl in ents]
     assert any(lbl in ("PERSON", "ORG") for lbl in labels)
     assert any(lbl in ("GPE", "LOC") for lbl in labels)
@@ -25,3 +23,4 @@ def test_spacy_basic_ents_and_tags():
     # בדיקת תגיות דקדוקיות
     tags = s.get_tag_and_displacy(text, display_render=False)
     assert len(tags) > 0
+
