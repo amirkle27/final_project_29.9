@@ -1,9 +1,4 @@
-#
-# from server import app
-#
-
 import numpy as np
-
 import dal
 from server import app
 from sklearn.tree import DecisionTreeClassifier
@@ -19,10 +14,6 @@ from pathlib import Path
 from processing_facade import LogisticRegressionFacade
 from preprocessoring_strategy import LogisticRegressionPreprocessor
 from processing_facade import DecisionTreeClassifierFacade
-
-
-
-
 
 pd.set_option('display.max_columns', None)
 pd.set_option('display.max_rows', None)
@@ -194,5 +185,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
