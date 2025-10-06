@@ -3,10 +3,12 @@ from pathlib import Path
 import pandas as pd
 
 class FileConverter(ABC):
-    """Abstract base class for file converters.
+    """
+    Abstract base class for file converters.
 
     Any subclass must implement the `convert_to_csv` method, which takes
-    a file path and converts the file to a CSV format. """
+    a file path and converts the file to a CSV format.
+    """
     @abstractmethod
     def convert_to_csv(self, file_path:Path):
         """
@@ -96,5 +98,6 @@ class JSONConverter(FileConverter):
         csv_path = file_path.with_suffix(".csv")
         df.to_csv(csv_path, index=False)
         return csv_path
+
 
 
