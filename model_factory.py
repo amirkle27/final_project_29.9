@@ -45,10 +45,12 @@ class ModelFactory:
 
     @staticmethod
     def _filter_params(allowed_params: list[str], input_params: Dict[str, Any]) -> Dict[str, Any]:
+            """Return only the key/value pairs from input_params that are in allowed_params."""
         return {k: input_params[k] for k in allowed_params if k in input_params}
 
     @classmethod
     def create(cls, model_name: str, input_params: Dict[str, Any] | None = None) -> Tuple[object, str]:
+            """Build and return (facade_instance, kind) for the given model_name."""
         params = input_params or {}
         if model_name in cls.CLASSIFIERS:
             Facade, allowed_params = cls.CLASSIFIERS[model_name]
@@ -66,3 +68,4 @@ class ModelFactory:
             return Facade(**kwargs), "regression"
 
         raise ValueError(f"Unknown model '{model_name}'")
+
