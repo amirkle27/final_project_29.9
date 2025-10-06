@@ -1,7 +1,19 @@
+"""
+Model 'facades' that wrap scikit-learn / Keras / XGBoost estimators behind a
+uniform interface.
+
+Each facade typically provides:
+- `train_and_evaluate(df, target_col)` → dict of metrics and artifacts
+- `predict(new_data)` or clustering-specific methods
+and delegates preprocessing to a strategy from `preprocessoring_strategy`.
+
+All facades raise `NotFittedError` (or RuntimeError) from `errors` when
+`predict` is called before training.
+"""
+
 from matplotlib import pyplot as plt
 from pandas.core.common import random_state
 import numpy as np
-
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression, LogisticRegressionCV
@@ -10,14 +22,11 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score, accuracy_score, silhouette_score
-
 from xgboost import XGBClassifier, XGBRegressor
 from sklearn.svm import SVC, SVR
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-
 from errors import InvalidPenaltySolverCombination, NotFittedError, MultipleFeaturesPolyError, PolinomialMaxMinError,PolinomialNotDFError, PolinomialForClassificationError, LinearForClassificationError
 from preprocessoring_strategy import *
-
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score
 from tensorflow.keras.models import Sequential
@@ -25,8 +34,6 @@ from tensorflow.keras.layers import Dense, Conv1D, GlobalMaxPooling1D, Dropout
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import BinaryCrossentropy, SparseCategoricalCrossentropy
 from scipy.optimize import minimize
-
-
 from typing import Optional
 import numpy as np
 import pandas as pd
@@ -36,13 +43,27 @@ from tensorflow.keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
 from keras.losses import BinaryCrossentropy, SparseCategoricalCrossentropy
 from keras.optimizers import Adam
-
-
 from keras.utils import to_categorical
 
 
 class LinearRegressionFacade:
+    """Facade for linear regression on tabular data.
+
+    Pipeline:
+      1) `LinearRegressionPreprocessor` (drop id/index cols, one-hot encode).
+      2) Standardize features.
+      3) Fit `sklearn.linear_model.LinearRegression`.
+
+    Raises:
+        LinearForClassificationError: if the target column is non-numeric.
+    """
     def __init__(self, test_size:float = 0.2, random_state:int = 27):
+        """Configure the facade.
+
+        Args:
+            test_size: Fraction for the hold-out test split.
+            random_state: RNG seed for reproducibility.
+        """
         self.preprocessor = LinearRegressionPreprocessor()
         self.model = LinearRegression()
         self.scaler = StandardScaler()
@@ -54,6 +75,15 @@ class LinearRegressionFacade:
 
 
     def train_and_evaluate(self, df:pd.DataFrame, target_col:str) -> dict:
+        """Train and evaluate with RMSE/R².
+
+        Args:
+            df: Input dataframe.
+            target_col: Name of numeric target column.
+
+        Returns:
+            Dict with model, scaler, mse, rmse, r2, y_test, y_pred.
+        """
         X, y = self.preprocessor.process(df, target_col)
         self.feature_cols = X.columns
 
@@ -81,6 +111,7 @@ class LinearRegressionFacade:
         }
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
+        """Predict numeric target for new rows (expects training columns)."""
         X_new = new_data.reindex(columns=self.feature_cols, fill_value=0)
         X_new_scaled = pd.DataFrame(self.scaler.transform(X_new), columns=self.feature_cols)
         y_hat = self.model.predict(X_new_scaled)
@@ -89,6 +120,7 @@ class LinearRegressionFacade:
 
 
 class DecisionTreeClassifierFacade:
+    """Decision tree classifier with simple preprocessing."""
     def __init__(self, test_size:float = 0.2, random_state:int = 27):
         self.preprocessor = DecisionTreePreprocessor()
         self.model = DecisionTreeClassifier()
@@ -96,6 +128,7 @@ class DecisionTreeClassifierFacade:
         self.random_state = random_state
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
+        """Train and report accuracy plus predictions on the test split."""
         X, y = self.preprocessor.process(df, target_col)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.test_size, random_state=self.random_state)
 
@@ -111,10 +144,12 @@ class DecisionTreeClassifierFacade:
         }
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
+        """Predict class labels for new rows."""
         return self.model.predict(new_data)
 
 
 class DecisionTreeRegressorFacade:
+    """Decision tree regressor with simple preprocessing."""
     def __init__(self, test_size:float = 0.2, random_state:int = 27):
         self.preprocessor = DecisionTreePreprocessor()
         self.model = DecisionTreeRegressor()
@@ -122,6 +157,7 @@ class DecisionTreeRegressorFacade:
         self.random_state = random_state
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
+        """Train and report MSE and R² plus predictions on the test split."""
         X, y = self.preprocessor.process(df, target_col)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.test_size, random_state=self.random_state)
 
@@ -139,10 +175,12 @@ class DecisionTreeRegressorFacade:
         }
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
+        """Predict numeric values for new rows."""
         return self.model.predict(new_data)
 
 
 class RandomForestRegressorFacade:
+    """Random forest regressor with decision-tree preprocessing."""
     def __init__(self, test_size:float = 0.2, random_state:int = 27, criterion="squared_error"):
         self.preprocessor = DecisionTreePreprocessor()
         self.model = RandomForestRegressor(random_state=random_state, criterion=criterion)
@@ -150,6 +188,7 @@ class RandomForestRegressorFacade:
         self.random_state = random_state
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
+        """Train and return MSE/R² with predictions."""
         X, y = self.preprocessor.process(df, target_col)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.test_size, random_state=self.random_state)
 
@@ -167,9 +206,11 @@ class RandomForestRegressorFacade:
         }
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
+        """Predict numeric values for new rows."""
         return self.model.predict(new_data)
 
 class RandomForestClassifierFacade:
+    """Random forest classifier with decision-tree preprocessing."""
     def __init__(self, test_size:float = 0.2, random_state:int = 27, criterion="gini"):
         self.preprocessor = DecisionTreePreprocessor()
         self.model = RandomForestClassifier(random_state=random_state, criterion=criterion)
@@ -177,6 +218,7 @@ class RandomForestClassifierFacade:
         self.random_state = random_state
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
+        """Train and return accuracy with predictions."""
         X, y = self.preprocessor.process(df, target_col)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.test_size, random_state=self.random_state)
 
@@ -192,10 +234,16 @@ class RandomForestClassifierFacade:
         }
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
+        ""Predict class labels for new rows."""
         return self.model.predict(new_data)
 
 
 class LogisticRegressionFacade:
+    """Logistic regression (optionally with different solvers/penalties).
+
+    Uses a `Pipeline` with `StandardScaler` → `LogisticRegression`.
+    Validates the (penalty, solver) combination and falls back to lbfgs/l2 if invalid.
+    """
     from sklearn.pipeline import Pipeline
     def __init__(self, test_size: float = 0.2, random_state: int = 27, solver='lbfgs', penalty='l2', C=1.0, max_iter: int = 5000):
         self.preprocessor = LogisticRegressionPreprocessor()
@@ -222,6 +270,7 @@ class LogisticRegressionFacade:
         self.random_state = random_state
 
     def validate_penalty_solver(self, penalty: str, solver: str):
+        """Raise `InvalidPenaltySolverCombination` for incompatible settings."""
         valid_combinations = {
             'l1': ['liblinear', 'saga'],
             'l2': ['lbfgs', 'liblinear', 'sag', 'saga'],
@@ -234,6 +283,7 @@ class LogisticRegressionFacade:
 
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
+        """Train and return accuracy plus predictions."""
         X, y = self.preprocessor.process(df, target_col)
         self.feature_cols = X.columns
 
@@ -263,10 +313,12 @@ class LogisticRegressionFacade:
 
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
+        """Predict class labels; aligns columns to those seen during training."""
         X_new = new_data.reindex(columns=self.feature_cols, fill_value=0)  # <— יישור
         return self.model.predict(X_new)
 
 class LogisticRegressionCVFacade:
+    """Cross-validated logistic regression with automatic `C` selection."""
     def __init__(self, test_size: float = 0.2, random_state: int = 27, solver='lbfgs', penalty='l2',
                  max_iter: int = 1000, cv: int = 5, scoring: str = 'accuracy'):
         self.preprocessor = LogisticRegressionPreprocessor()
@@ -291,6 +343,7 @@ class LogisticRegressionCVFacade:
         self.random_state = random_state
 
     def validate_penalty_solver(self, penalty: str, solver: str):
+        """Raise `InvalidPenaltySolverCombination` for incompatible settings."""
         valid_combinations = {
             'l1': ['liblinear', 'saga'],
             'l2': ['lbfgs', 'liblinear', 'sag', 'saga'],
@@ -303,6 +356,7 @@ class LogisticRegressionCVFacade:
 
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
+        """Train and return best C, accuracy, and predictions."""
         X, y = self.preprocessor.process(df, target_col)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.test_size, random_state=self.random_state)
 
@@ -319,9 +373,11 @@ class LogisticRegressionCVFacade:
         }
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
+        """Predict class labels for new rows."""
         return self.model.predict(new_data)
 
 class KMeansClusteringFacade:
+    """K-Means clustering with scaling and silhouette scoring."""
     def __init__(self, n_clusters:int = 3, random_state:int = 27, max_iter:int = 300):
         self.preprocessor = ClusteringPreprocessor()
         self.n_clusters = n_clusters
@@ -332,6 +388,7 @@ class KMeansClusteringFacade:
         self.fitted = False
 
     def train_and_cluster(self, df: pd.DataFrame) -> dict:
+        """Fit clusters and return labels, centroids, and silhouette score."""
         X, _ = self.preprocessor.process(df)
         X_scaled = self.scaler.fit_transform(X)
 
@@ -352,6 +409,7 @@ class KMeansClusteringFacade:
         }
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
+        """Assign cluster labels to new rows (requires prior fitting)."""
         if not self.fitted:
             raise NotFittedError
 
@@ -361,6 +419,7 @@ class KMeansClusteringFacade:
 
 
 class DBScanClusteringFacade:
+    """Assign cluster labels to new rows (requires prior fitting)."""
     def __init__(self, min_samples:int = 5, eps:float = 0.5):
         self.preprocessor = ClusteringPreprocessor()
         self.min_samples = min_samples
@@ -370,6 +429,7 @@ class DBScanClusteringFacade:
         self.fitted = False
 
     def train_and_cluster(self, df: pd.DataFrame) -> dict:
+        """Run DBSCAN and return labels and silhouette score."""
         X, _ = self.preprocessor.process(df)
         X_scaled = self.scaler.fit_transform(X)
 
@@ -389,6 +449,7 @@ class DBScanClusteringFacade:
         }
 
 class KNNFacade:
+    """K-Nearest Neighbors classifier with Min-Max scaling."""
     def __init__(self, test_size: float = 0.2, random_state: int = 27, n_neighbors = 3):
         self.test_size = test_size
         self.random_state = random_state
@@ -399,6 +460,7 @@ class KNNFacade:
         self.fitted = False
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
+        """Train and return accuracy with predictions."""
         X, y = self.preprocessor.process(df, target_col)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.test_size, random_state=self.random_state)
         X_train = self.scaler.fit_transform(X_train)
@@ -417,6 +479,7 @@ class KNNFacade:
         }
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
+        """Predict class labels (requires prior training)."""
         if not self.fitted:
             raise NotFittedError
 
@@ -428,6 +491,15 @@ class KNNFacade:
 
 
 class ANNFacade:
+    """Dense feed-forward neural network for tabular classification.
+
+    - One-hot encodes categorical features and (optionally) label-encodes target
+      via `ANNCNNPreprocessor`.
+    - Standardizes features.
+    - Builds a simple MLP with configurable hidden layers.
+
+    `predict` returns a dataframe with predicted label and per-class probabilities.
+    """
     from tensorflow.keras import Input
     def __init__(self, test_size: float = 0.2, random_state: int = 27, hidden_layers: list = [64, 32], epochs: int = 20, batch_size: int = 32):
         self.test_size = test_size
@@ -442,6 +514,7 @@ class ANNFacade:
         self.label_encoder = None
 
     def build_model(self, input_dim: int, output_dim: int):
+        """Create and compile the Keras MLP model."""
         model = Sequential()
         model.add(Dense(self.hidden_layers[0], activation='relu'))
         for units in self.hidden_layers[1:]:
@@ -458,6 +531,7 @@ class ANNFacade:
         return model
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
+        """Train model and return accuracy and predictions on the test split."""
         X, y = self.preprocessor.process(df, target_col)
         self.label_encoder = self.preprocessor.label_encoder
 
@@ -484,6 +558,7 @@ class ANNFacade:
         }
 
     def predict(self, new_data: pd.DataFrame) -> pd.DataFrame:
+        """Return predicted label and probabilities for each row."""
         if not self.fitted:
             raise NotFittedError
 
@@ -514,6 +589,7 @@ class ANNFacade:
 
 
 class CNNFacade:
+    """1-D CNN for tabular features (after scaling), for classification."""
     def __init__(self, test_size: float = 0.2, random_state: int = 27, filters: int = 64, kernel_size: int = 3,
                  epochs: int = 20, batch_size: int = 32):
         self.test_size = test_size
@@ -528,6 +604,7 @@ class CNNFacade:
         self.fitted = False
 
     def build_model(self, input_shape: tuple, output_dim: int):
+        """Create and compile the Keras 1-D CNN model."""
         model = Sequential()
         model.add(Conv1D(filters=self.filters, kernel_size=self.kernel_size,
                          activation='relu', input_shape=input_shape))
@@ -546,6 +623,7 @@ class CNNFacade:
         return model
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
+        """Train model and return accuracy and predictions on the test split."""
         X, y = self.preprocessor.process(df, target_col)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.test_size, random_state=self.random_state)
 
@@ -572,6 +650,7 @@ class CNNFacade:
         }
 
     def predict(self, new_data: pd.DataFrame, target_col: Optional[str] = None) -> pd.DataFrame:
+        """Return predicted class and probabilities for each row."""
         if not self.fitted:
             raise NotFittedError
 
@@ -598,6 +677,11 @@ class CNNFacade:
 
 
 class NLPFacade:
+    """Simple LSTM-based text classifier/regressor.
+
+    Uses `NLPPreprocessor` to tokenize and pad a single text column.
+    Builds an Embedding→LSTM→Dense model.
+    """
     def __init__(self,
                  test_size: float = 0.2,
                  random_state: int = 27,
@@ -619,6 +703,7 @@ class NLPFacade:
         self.fitted = False
 
     def build_model(self, output_dim: int):
+        """Create and compile the Keras LSTM model."""
         model = Sequential()
         model.add(Embedding(input_dim=self.max_words, output_dim=self.embedding_dim, input_length=self.max_len))
         model.add(LSTM(64))
@@ -635,6 +720,7 @@ class NLPFacade:
         return model
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str):
+        """Train model and return accuracy and predictions on the test split."""
         X, y = self.preprocessor.process(df, target_col)
         output_dim = len(np.unique(y))
         if output_dim > 2:
@@ -657,6 +743,7 @@ class NLPFacade:
         }
 
     def predict(self, new_data: pd.DataFrame) -> pd.DataFrame:
+        """Return predicted class and probabilities for each text row."""
         if not self.fitted:
             raise RuntimeError("Model not fitted. Call train_and_evaluate first.")
 
@@ -686,6 +773,13 @@ class NLPFacade:
 
 
 class PolynomialFacade:
+    """Polynomial regression wrapper that also supports plotting and simple
+    optimization of predictions over feature ranges.
+
+    Uses a polynomial preprocessor to return `PolynomialFeatures`, then fits
+    a linear model on the expanded features.
+    """
+
     def __init__(self, preprocessor, degree: int = 2):
         self.preprocessor = preprocessor
         self.degree = degree
@@ -698,6 +792,11 @@ class PolynomialFacade:
         self.feature_cols = None
 
     def train_and_evaluate(self, df, target_col: str):
+        """Train and report MSE/RMSE/R² on a hold-out split.
+
+        Raises:
+            PolinomialForClassificationError: if the target is not numeric.
+        """
         X_raw, y, poly = self.preprocessor.process(df, target_col)
         self.poly = poly
         self.X = X_raw
@@ -728,10 +827,14 @@ class PolynomialFacade:
 
 
     def plot(self):
+        """Plot polynomial fit for single-feature problems.
+
+        Raises:
+            MultipleFeaturesPolyError: if more than one feature exists.
+        """
         try:
             if self.X.shape[1] != 1:
                 raise MultipleFeaturesPolyError()
-
 
             x_line = np.linspace(self.X.min().values[0], self.X.max().values[0], 100).reshape(-1, 1)
             x_line_poly = self.poly.transform(x_line)
@@ -749,6 +852,7 @@ class PolynomialFacade:
             print(e)
 
     def predict_row(self, new_row: pd.DataFrame):
+        """Predict for a single row (as a dataframe) with aligned columns."""
         new_row_aligned = new_row.reindex(columns=self.feature_cols, fill_value=0)
         Xp = self.poly.transform(new_row_aligned)
         y_hat = self.model.predict(Xp)
@@ -756,6 +860,17 @@ class PolynomialFacade:
         return y_hat
 
     def predict_opt(self, min_or_max:str='max'):
+        """Find feature values that approximately maximize/minimize prediction.
+
+        For 1D quadratic, returns vertex analytically; otherwise uses bounded
+        numerical optimization within observed feature ranges.
+
+        Args:
+            min_or_max: 'max' or 'min'.
+
+        Returns:
+            Tuple of (x_opt, y_opt).
+        """
         if self.X.shape[1] == 1 and self.degree == 2:
             b = float(self.model.coef_[0])
             c = float(self.model.coef_[1])
@@ -787,6 +902,15 @@ class PolynomialFacade:
             return x_opt, y_opt
 
     def predict(self, arg='row'):
+        """Dispatch to row prediction or optimization helper.
+
+        Args:
+            arg: Either a dataframe row (predict that row) or 'max'/'min'.
+
+        Raises:
+            PolinomialMaxMinError: if `arg` is a str other than 'max'/'min'.
+            PolinomialNotDFError: if `arg` is neither str nor DataFrame.
+        """
         if isinstance(arg, pd.DataFrame):
             return self.predict_row(arg)
         if isinstance(arg, str):
@@ -797,6 +921,7 @@ class PolynomialFacade:
 
 
 class SVMClassifierFacade:
+    """Support Vector Machine classifier with scaling."""
     def __init__(self, test_size: float = 0.2, random_state: int = 27,
                  C: float = 1.0, kernel: str = "rbf", gamma: str | float = "scale", degree: int = 3):
         self.preprocessor = LogisticRegressionPreprocessor()  # ממיר קטגוריות ל-One-Hot ומנקה NA:contentReference[oaicite:4]{index=4}
@@ -808,6 +933,7 @@ class SVMClassifierFacade:
         self.feature_cols = None
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
+        """Train and return accuracy with predictions."""
         X, y = self.preprocessor.process(df, target_col)
         self.feature_cols = X.columns
         X_train, X_test, y_train, y_test = train_test_split(
@@ -822,14 +948,15 @@ class SVMClassifierFacade:
         return {"model": self.model, "accuracy": acc, "y_test": y_test, "prediction": y_pred}
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
+        """Predict class labels for new rows (requires prior training)."""
         if not self.fitted:
             raise RuntimeError("Model not fitted. Call train_and_evaluate first.")
         X_new = new_data.reindex(columns=self.feature_cols, fill_value=0)
         X_new = self.scaler.transform(X_new)
         return self.model.predict(X_new)
 
-# רגרסיה: SVR
 class SVMRegressorFacade:
+    """Support Vector Regressor with scaling."""
     def __init__(self, test_size: float = 0.2, random_state: int = 27,
                  C: float = 1.0, kernel: str = "rbf", gamma: str | float = "scale", degree: int = 3, epsilon: float = 0.1):
 
@@ -842,6 +969,7 @@ class SVMRegressorFacade:
         self.feature_cols = None
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
+        """Train and return MSE/RMSE/R² with predictions."""
         X, y = self.preprocessor.process(df, target_col)
         self.feature_cols = X.columns
         X_train, X_test, y_train, y_test = train_test_split(
@@ -858,6 +986,7 @@ class SVMRegressorFacade:
         return {"model": self.model, "mse": mse, "rmse": rmse, "r2": r2, "y_test": y_test, "prediction": y_pred}
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
+        """Predict numeric values for new rows (requires prior training)."""
         if not self.fitted:
             raise RuntimeError("Model not fitted. Call train_and_evaluate first.")
         X_new = new_data.reindex(columns=self.feature_cols, fill_value=0)
@@ -866,6 +995,7 @@ class SVMRegressorFacade:
 
 
 class XGBClassifierFacade:
+    """Gradient-boosted tree classifier (XGBoost)."""
     def __init__(self, test_size: float = 0.2, random_state: int = 27,
                  n_estimators: int = 100, max_depth: int = 3, learning_rate: float = 0.1):
         self.preprocessor = LogisticRegressionPreprocessor()
@@ -883,6 +1013,7 @@ class XGBClassifierFacade:
         self.feature_cols = None
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
+        """Train and return accuracy with predictions."""
         X, y = self.preprocessor.process(df, target_col)
         self.feature_cols = X.columns
         X_train, X_test, y_train, y_test = train_test_split(
@@ -895,12 +1026,14 @@ class XGBClassifierFacade:
         return {"model": self.model, "accuracy": acc, "y_test": y_test, "prediction": y_pred}
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
+        """Predict class labels for new rows (requires prior training)."""
         if not self.fitted:
             raise RuntimeError("Model not fitted. Call train_and_evaluate first.")
         X_new = new_data.reindex(columns=self.feature_cols, fill_value=0)
         return self.model.predict(X_new)
 
 class XGBRegressorFacade:
+    """Gradient-boosted tree regressor (XGBoost)."""
     def __init__(self, test_size: float = 0.2, random_state: int = 27,
                  n_estimators: int = 100, max_depth: int = 3, learning_rate: float = 0.1):
 
@@ -917,6 +1050,7 @@ class XGBRegressorFacade:
         self.feature_cols = None
 
     def train_and_evaluate(self, df: pd.DataFrame, target_col: str) -> dict:
+        """Train and return MSE/RMSE/R² with predictions."""
         X, y = self.preprocessor.process(df, target_col)
         self.feature_cols = X.columns
         X_train, X_test, y_train, y_test = train_test_split(
@@ -931,7 +1065,9 @@ class XGBRegressorFacade:
         return {"model": self.model, "mse": mse, "rmse": rmse, "r2": r2, "y_test": y_test, "prediction": y_pred}
 
     def predict(self, new_data: pd.DataFrame) -> pd.Series:
+        """Predict numeric values for new rows (requires prior training)."""
         if not self.fitted:
             raise RuntimeError("Model not fitted. Call train_and_evaluate first.")
         X_new = new_data.reindex(columns=self.feature_cols, fill_value=0)
+
         return self.model.predict(X_new)
