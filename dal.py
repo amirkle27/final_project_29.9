@@ -1,3 +1,17 @@
+"""
+Data Access Layer (DAL) for the FastAPI ML server.
+
+This module manages:
+- SQLite connection and schema creation.
+- CRUD operations for users and models.
+- Token accounting (deduct/update) and usage logging.
+
+Tables:
+    users(username PK, password_hash, tokens, joined_at, usage_count)
+    usage_logs(id PK, username, action, model_name, file_name, tokens_after_usage, created_at)
+    models(id PK, username, model_name, kind, path, features JSON, label, metrics JSON, created_at)
+"""
+
 import sqlite3
 from datetime import datetime
 import json
@@ -5,9 +19,19 @@ import json
 DB_NAME = "ml_server.db"
 
 def _connect():
+    """
+    Open a new SQLite connection to the configured database.
+
+    Returns:
+        sqlite3.Connection: An open connection to the database.
+    """
     return sqlite3.connect(DB_NAME)
 
 def init_db():
+    """
+    Initialize database schema (idempotent).
+    Creates `users`, `usage_logs`, and `models` tables if they don't exist.
+    """
     with _connect() as conn:
         db = conn.cursor()
 
@@ -50,6 +74,19 @@ def init_db():
 
 def insert_model(model_id: str, username: str, model_name: str, kind: str,
                  path: str, features: list[str], label: str, metrics: dict):
+                     """
+    Insert a trained model record.
+
+    Args:
+        model_id: Unique identifier for the model.
+        username: Owner username.
+        model_name: Algorithm name (e.g., 'linear', 'logreg').
+        kind: Problem type ('regression' / 'classification' / etc.).
+        path: Filesystem path to the serialized model.
+        features: List of feature column names used for training.
+        label: Target column name.
+        metrics: Training/evaluation metrics as a dict (stored as JSON).
+    """
     with _connect() as conn:
         db = conn.cursor()
         db.execute("""
@@ -60,6 +97,15 @@ def insert_model(model_id: str, username: str, model_name: str, kind: str,
         conn.commit()
 
 def list_models(username: str):
+    """
+    List models that belong to a given user.
+
+    Args:
+        username: The owner's username.
+
+    Returns:
+        list[dict]: Model rows with JSON fields parsed into Python objects.
+    """
     with _connect() as conn:
         db = conn.cursor()
         rows = db.execute("""
@@ -81,6 +127,15 @@ def list_models(username: str):
         return out
 
 def get_model(model_id: str):
+    """
+    Fetch a single model record by ID.
+
+    Args:
+        model_id: The model's unique identifier.
+
+    Returns:
+        dict | None: Parsed model record, or None if not found.
+    """
     with _connect() as conn:
         db = conn.cursor()
         r = db.execute("""
@@ -102,6 +157,14 @@ def get_model(model_id: str):
         }
 
 def insert_user(username: str, password_hash: str, initial_tokens: int = 15):
+    """
+    Create a new user.
+
+    Args:
+        username: Unique username (PK).
+        password_hash: Hashed password.
+        initial_tokens: Starting token balance (default 15).
+    """
     with _connect() as conn:
         db = conn.cursor()
         db.execute(
@@ -110,6 +173,16 @@ def insert_user(username: str, password_hash: str, initial_tokens: int = 15):
         conn.commit()
 
 def get_user(username: str):
+    """
+    Retrieve a user by username.
+
+    Args:
+        username: Username to look up.
+
+    Returns:
+        dict | None: User record with fields (username, password_hash, tokens, joined_at, usage_count),
+                     or None if the user doesn't exist.
+    """
     with _connect() as conn:
         db = conn.cursor()
         row = db.execute("SELECT username, password_hash, tokens, joined_at, usage_count FROM users WHERE username=?", (username,)).fetchone()
@@ -124,18 +197,41 @@ def get_user(username: str):
         }
 
 def update_tokens(username: str, new_tokens: int):
+    """
+    Set a user's token balance to a specific value.
+
+    Args:
+        username: The user to update.
+        new_tokens: New token count (must be >= 0).
+    """
     with _connect() as conn:
         db = conn.cursor()
         db.execute("UPDATE users SET tokens=? WHERE username=?", (new_tokens, username))
         conn.commit()
 
 def increment_usage(username: str):
+    """
+    Increment the usage counter for a user by 1.
+
+    Args:
+        username: The user to update.
+    """
     with _connect() as conn:
         db = conn.cursor()
         db.execute("UPDATE users SET usage_count = usage_count + 1 WHERE username=?", (username,))
         conn.commit()
 
 def log_usage(username: str, action: str, model_name: str | None, file_name: str | None, tokens_after_usage: int):
+    """
+    Insert a usage log entry.
+
+    Args:
+        username: The acting user.
+        action: Action string (e.g., 'train', 'predict/by_id').
+        model_name: Optional model name involved in the action.
+        file_name: Optional uploaded file name involved in the action.
+        tokens_after_usage: User's token balance after the action.
+    """
     with _connect() as conn:
         db = conn.cursor()
         db.execute("""
@@ -145,6 +241,21 @@ def log_usage(username: str, action: str, model_name: str | None, file_name: str
         conn.commit()
 
 def update_tokens_and_log(username: str, cost: int, action: str, model_name: str | None, file_name: str | None):
+    """
+    Atomically deduct tokens for an action and write a usage log entry.
+
+    Args:
+        username: Acting user.
+        cost: Positive integer cost in tokens.
+        action: Action label (e.g., 'train', 'predict/by_id').
+        model_name: Optional model name.
+        file_name: Optional file name.
+    Returns:
+        int: New token balance after deduction.
+
+    Raises:
+        ValueError: If user is unknown, cost is invalid, or user lacks tokens.
+    """
     if not isinstance(cost, int) or cost <= 0:
         raise ValueError("cost must be a positive integer")
 
@@ -174,4 +285,5 @@ def update_tokens_and_log(username: str, cost: int, action: str, model_name: str
         conn.commit()
 
     return new_tokens
+
 
