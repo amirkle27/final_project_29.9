@@ -1,3 +1,25 @@
+"""
+FastAPI ML Server
+
+Provides authentication (signup/login/JWT), token accounting, model training,
+prediction, and model management. Models are trained via facades from
+`model_factory`, saved as joblib bundles under ./models, and metadata is stored
+through the `dal` layer (SQLite).
+
+Main endpoints:
+- POST /signup, POST /login, POST /token
+- GET  /health
+- POST /train
+- GET  /models
+- POST /predict/classification
+- POST /predict/regression
+- POST /predict/by_id/{model_id}
+- POST /predict/{model_name}     (use latest trained model of that name)
+- GET  /tokens/{username}
+- POST /add_tokens
+- DELETE /remove_user
+"""
+
 import dal
 import jwt
 from enum import Enum
@@ -32,9 +54,11 @@ from http import HTTPStatus
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(p: str) -> str:
+    """Return a bcrypt hash for a plaintext password."""
     return pwd_context.hash(p)
 
 def verify_password(plain: str, hashed: str) -> bool:
+    """Verify a plaintext password against its bcrypt hash."""
     return pwd_context.verify(plain, hashed)
 
 #SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
@@ -70,14 +94,17 @@ logger.info("Server starting up")
 
 
 class Signup(BaseModel):
+    """Request body for /signup."""
     username: str
     password: str
 
 class Login(BaseModel):
+    """Request body for /login (username/password)."""
     username: str
     password: str
 
 def _valid_password(p: str) -> bool:
+    """Minimal password policy: ≥6 chars, one uppercase, one special char."""
     return (
         isinstance(p, str) and
         len(p) >= 6 and
@@ -85,8 +112,8 @@ def _valid_password(p: str) -> bool:
         re.search(r"[^A-Za-z0-9]", p)
     )
 
-def create_access_token(data: dict, minutes: int = ACCESS_TOKEN_EXPIRE_MINUTES) -> str:
-    # שימוש ב־UTC עם timezone-aware כדי למנוע בעיות iat/exp
+def _create_access_token(data: dict, minutes: int = ACCESS_TOKEN_EXPIRE_MINUTES) -> str:
+    """Create a signed JWT with `sub` claim and exp/iat in UTC."""
     now = datetime.now(timezone.utc)
     expire = now + timedelta(minutes=minutes)
     to_encode = data.copy()
@@ -95,24 +122,28 @@ def create_access_token(data: dict, minutes: int = ACCESS_TOKEN_EXPIRE_MINUTES) 
 
 
 def _save_upload_to_temp(upload: UploadFile) -> Path:
+    """Persist an uploaded file to a temp path and return its Path."""
     suffix = Path(upload.filename).suffix or ".csv"
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     tmp.write(upload.file.read()); tmp.flush()
     return Path(tmp.name)
 
 def _load_df(upload: UploadFile) -> pd.DataFrame:
+    """Convert uploaded file (csv/xlsx/json…) to CSV via factory and read as DataFrame."""
     p = _save_upload_to_temp(upload)
     converter = FileConverterFactory().get(p)
     csv_path = converter.convert_to_csv(p)
     return pd.read_csv(csv_path)
 
 def _parse_json_field(s: str) -> dict:
+    """Parse a JSON string field to dict; raise InputInvalidJSON on failure."""
     try:
         return json.loads(s) if s else {}
     except Exception:
         log_and_raise(InputInvalidJSON(details={"value": s[:200]}))
 
 def _clean_float(x):
+    """Safe float conversion; returns None if NaN/Inf or conversion fails."""
     try:
         x = float(x)
         if math.isnan(x) or math.isinf(x):
@@ -121,20 +152,23 @@ def _clean_float(x):
     except Exception:
         return None
 
+@app.get("/health")
+def health():
+    """Liveness probe for the service."""
+    return {"ok": True}
+    
 @app.post("/token")
 def issue_token(form: OAuth2PasswordRequestForm = Depends()):
+    """OAuth2 token endpoint. Validates credentials and returns a bearer JWT."""
     user = dal.get_user(form.username)
     if not user or not verify_password(form.password, user["password_hash"]):
         log_and_raise(AuthBadCredentials())
     token = create_access_token({"sub": user["username"]})
     return {"access_token": token, "token_type": "bearer"}
 
-@app.get("/health")
-def health():
-    return {"ok": True}
-
 @app.post("/signup")
 def signup(payload: Signup):
+    """Create a new user and seed with initial tokens."""
     if not _valid_password(payload.password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -148,9 +182,9 @@ def signup(payload: Signup):
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="username already exists")
 
-
 @app.post("/login")
 def login(payload: Login):
+    """Login with username/password and receive a bearer JWT."""
     user = dal.get_user(payload.username)
     if not user or not verify_password(payload.password, user["password_hash"]):
         log_and_raise(AuthBadCredentials())
@@ -158,10 +192,8 @@ def login(payload: Login):
     logger.info(f"User '{payload.username}' logged in")
     return {"access_token": token, "token_type": "bearer"}
 
-
-
-
 def get_current_user(token: str = Depends(oauth2_scheme)):
+    """Dependency that validates the JWT and returns the user record."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
@@ -186,6 +218,20 @@ def predict_classification(
     model_params: str = Form("{}"),
     user: dict = Depends(get_current_user),
 ):
+    """Train a classifier on the uploaded dataset and return a single prediction.
+
+    Body (multipart/form-data):
+      - file: dataset file (csv/xlsx/json…)
+      - target_col: name of label column
+      - model: model key for `ModelFactory` (default: 'logreg')
+      - data: JSON of a single row to predict
+      - model_params: JSON dict of hyper-params to pass into the facade
+
+    Returns:
+      model name, metrics (accuracy), and the predicted class as string.
+
+    Charges 5 tokens on success.
+    """
     try:
         df = _load_df(file)
         new_row = _parse_json_field(data)
@@ -204,8 +250,7 @@ def predict_classification(
             pred_value = pred[0]
         else:
             pred_value = pred
-
-        # חיוב 5 טוקנים + לוג שימוש
+            
         try:
             dal.update_tokens_and_log(
                 username=user["username"],
@@ -234,7 +279,6 @@ def predict_classification(
         raise HTTPException(400, str(e))
 
 
-
 @app.post("/predict/regression")
 def predict_regression(
     file: UploadFile = File(...),
@@ -244,6 +288,11 @@ def predict_regression(
     model_params: str = Form("{}"),
     user: dict = Depends(get_current_user),
 ):
+    """Train a regressor on the uploaded dataset and return a single prediction.
+
+    Same contract as /predict/classification, but returns numeric metrics
+    (mse, rmse, r2) and a float prediction. Charges 5 tokens on success.
+    """
     try:
         df = _load_df(file)
         new_row = _parse_json_field(data)
@@ -292,12 +341,13 @@ def predict_regression(
         raise HTTPException(400, str(e))
 
 def _ensure_features(df: pd.DataFrame, features: list[str], label: str):
+    """Validate that all requested features + label exist in the dataframe."""
     missing = [c for c in features + [label] if c not in df.columns]
     if missing:
         log_and_raise(InputMissingColumns(details={"missing": missing}))
 
 def _subset_df(df: pd.DataFrame, features: list[str], label: str) -> pd.DataFrame:
-    # שומרים רק את הפיצ'רים והלייבל (כדי שה-Preprocessor שלך יעבוד בדיוק על מה שביקשו)
+    """Return a copy containing only selected features + label."""
     return df[features + [label]].copy()
 
 @app.post("/train")
@@ -309,8 +359,17 @@ def train_model(
     model_params: str = Form("{}"), # JSON dict
     user: dict = Depends(get_current_user),
 ):
-    """
-    מאמן מודל, שומר אותו כ-pkl, רושם מטא-דאטה ב-DB, מחייב 1 טוקן, ומחזיר model_id.
+    """Train a model and persist its bundle to disk + metadata to DB.
+
+    Request:
+      - file: dataset file
+      - model_name: key supported by ModelFactory (e.g. 'linear', 'logreg'…)
+      - features: JSON array or comma-separated list
+      - label: target column name
+      - model_params: JSON dict of hyper-parameters
+
+    Returns:
+      model_id, metrics and saved metadata. Charges 1 token on success.
     """
     try:
         # --- parse features (JSON array or comma-separated) ---
@@ -416,18 +475,14 @@ def train_model(
         raise HTTPException(400, str(e))
 
 
-
 @app.get("/models")
 def list_user_models(user: dict = Depends(get_current_user)):
-    """
-    מחזיר את כל המודלים ששמורים למשתמש המחובר.
-    """
+    """Return all models owned by the current user (optionally charges 1 token)."""
     models = dal.list_models(user["username"])
-    # פעולה זו היא “מטא־דאטה” – תרצה לחייב 1 טוקן? (לפי הדרישה – אפשר)
     try:
         dal.update_tokens_and_log(
             username=user["username"],
-            cost=1,  # אם אתה רוצה לחייב גם על קריאת מטא־דאטה
+            cost=1,  
             action="list_models",
             model_name=None,
             file_name=None,
@@ -435,7 +490,6 @@ def list_user_models(user: dict = Depends(get_current_user)):
         logger.info(f"User '{user['username']}' listed models")
 
     except ValueError:
-        # לא נכשיל את הבקשה על רשימת מודלים — לשיקולך. אפשר גם כן לזרוק 402.
         pass
 
     return {"models": models}
@@ -446,13 +500,19 @@ def predict_by_id(
     data: str = Form(...),  # JSON dict: {"age":35, "salary":70000, "rooms":3}
     user: dict = Depends(get_current_user),
 ):
+    """Predict using a previously trained/saved model bundle by its model_id.
+
+    Body:
+      - data: JSON object whose keys match the trained feature columns.
+
+    Returns:
+      {"prediction": <str or float>} and charges 5 tokens.
+    """
     try:
-        # 1) שליפת מטא־דאטה ובעלות
         meta = dal.get_model(model_id)
         if not meta or meta["username"] != user["username"]:
             log_and_raise(ModelNotFound(details={"model_id": model_id}))
-
-        # 2) טעינת ה-bundle
+            
         bundle = joblib.load(meta["path"])
         model = bundle.get("model")
         if model is None:
@@ -461,7 +521,6 @@ def predict_by_id(
         if not feature_cols:
             log_and_raise(ModelBundleCorrupt(details={"missing": "feature_cols"}))
 
-        # 3) פרסינג של הנתונים החדשים + יישור לעמודות
         try:
             new_row = json.loads(data)
             if not isinstance(new_row, dict):
@@ -471,17 +530,14 @@ def predict_by_id(
 
         X_new = pd.DataFrame([new_row]).reindex(columns=feature_cols, fill_value=0)
 
-        # 4) טרנספורמציות אם קיימות
         scaler = bundle.get("scaler")
         if scaler is not None:
             X_new = pd.DataFrame(scaler.transform(X_new), columns=feature_cols)
 
         poly = bundle.get("poly")
         if poly is not None:
-            # poly מחזיר ndarray; המודל כבר מאומן עליו
             X_new = poly.transform(X_new)
 
-        # 5) ניבוי
         y_hat = model.predict(X_new)
 
         if meta["kind"] == "classification":
@@ -491,7 +547,6 @@ def predict_by_id(
             val = float(y_hat[0] if hasattr(y_hat, "__len__") else y_hat)
             resp = {"prediction": val}
 
-        # 6) חיוב 5 טוקנים + לוג
         try:
             dal.update_tokens_and_log(
                 username=user["username"],
@@ -502,7 +557,6 @@ def predict_by_id(
             )
             logger.info(f"User '{user['username']}' predicted by_id model_id='{model_id}'")
         except ValueError as e:
-            # DAL משליך ValueError עם "not enough tokens" כשאין מספיק
             raise HTTPException(status_code=402, detail=str(e))
 
         return resp
@@ -510,16 +564,16 @@ def predict_by_id(
     except HTTPException:
         raise
     except Exception as e:
-        # שמרנו ב-400 כדי לא לחשוף פרטים מיותרים, אבל כן להחזיר למזמין מה לא עבד
         raise HTTPException(status_code=400, detail=str(e))
 
 class RemoveUser(BaseModel):
+    """Body for DELETE /remove_user."""
     username: str
     password: str
 
 @app.delete("/remove_user")
 def remove_user(payload: RemoveUser, user: dict = Depends(get_current_user)):
-    # מאפשר למחוק רק את עצמך (או הרחב כאן לכללים אחרים)
+    """Delete the current user's account and all related data (self-service only)."""
     if payload.username != user["username"]:
         raise HTTPException(status_code=403, detail="Not allowed to remove other users")
 
@@ -527,7 +581,6 @@ def remove_user(payload: RemoveUser, user: dict = Depends(get_current_user)):
     if not u or not verify_password(payload.password, u["password_hash"]):
         raise HTTPException(status_code=401, detail="Bad credentials")
 
-    # מחיקה ישירה ב-SQLite (מינימלי, בלי הרחבת DAL)
     with sqlite3.connect(dal.DB_NAME) as conn:
         db = conn.cursor()
         db.execute("DELETE FROM models WHERE username=?", (payload.username,))
@@ -540,6 +593,7 @@ def remove_user(payload: RemoveUser, user: dict = Depends(get_current_user)):
 
 @app.get("/tokens/{username}")
 def get_tokens(username: str, user: dict = Depends(get_current_user)):
+    """Return current token balance for the authenticated user."""
     if username != user["username"]:
         raise HTTPException(status_code=403, detail="Not allowed to view other users' tokens")
 
@@ -551,12 +605,14 @@ def get_tokens(username: str, user: dict = Depends(get_current_user)):
 
 
 class AddTokens(BaseModel):
+    """Body for POST /add_tokens (mock billing)."""
     username: str
     credit_card: str
     amount: int
 
 @app.post("/add_tokens")
 def add_tokens(payload: AddTokens, user: dict = Depends(get_current_user)):
+    """Increase the authenticated user's token balance (demo payment endpoint)."""
     if payload.username != user["username"]:
         raise HTTPException(status_code=403, detail="Not allowed to add tokens to other users")
 
@@ -569,7 +625,6 @@ def add_tokens(payload: AddTokens, user: dict = Depends(get_current_user)):
 
     new_total = int(u["tokens"]) + int(payload.amount)
     dal.update_tokens(payload.username, new_total)
-    # רישום בלוג שימוש (לא מחייב טוקן)
     dal.log_usage(payload.username, "add_tokens", None, None, tokens_after_usage=new_total)
     logger.info(f"User '{payload.username}' added {payload.amount} tokens (new total: {new_total})")
 
@@ -582,13 +637,16 @@ def predict_model_name(
     data: dict = Body(...),
     user: dict = Depends(get_current_user),
 ):
-    # 1) לאסוף את המודל האחרון של המשתמש עבור model_name
+    """Predict using the most recent model the user trained with this `model_name`.
+
+    Body:
+      - data: JSON object whose keys match the trained feature columns.
+    """
     models = dal.list_models(user["username"])  # כבר ממויין יורד לפי created_at
     meta = next((m for m in models if m["model_name"] == model_name), None)
     if not meta:
         raise HTTPException(status_code=404, detail=f"No trained model found for '{model_name}'")
 
-    # 2) לטעון bundle וליישר פיצ'רים
     try:
         bundle = joblib.load(meta["path"])
         feature_cols = bundle["feature_cols"]
@@ -600,7 +658,6 @@ def predict_model_name(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load model bundle: {e}")
 
-    # 3) להכין נתונים חדשים
     try:
         X_new = pd.DataFrame([data]).reindex(columns=feature_cols, fill_value=0)
         if scaler is not None:
@@ -610,7 +667,6 @@ def predict_model_name(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Bad input data: {e}")
 
-    # 4) ניבוי + חיוב טוקנים
     try:
         y_hat = model.predict(X_new)
         if meta["kind"] == "classification":
@@ -620,7 +676,6 @@ def predict_model_name(
             val = float(y_hat[0] if hasattr(y_hat, "__len__") else y_hat)
             response = {"prediction": val}
 
-        # חיוב 5 טוקנים
         try:
             dal.update_tokens_and_log(
                 username=user["username"],
@@ -648,11 +703,8 @@ if __name__ == "__main__":
 
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
-    reload = os.getenv("RELOAD", "0") == "1"  # פתחו רילוד בפיתוח: RELOAD=1
+    reload = os.getenv("RELOAD", "0") == "1"  
     workers = int(os.getenv("WORKERS", "1"))
     log_level = os.getenv("LOG_LEVEL", "info")
 
-    # אפשר להשתמש במחרוזת "module:app" או באובייקט app עצמו – שניהם תקינים.
     uvicorn.run("server:app", host=host, port=port, reload=reload, workers=workers, log_level=log_level)
-    # לחלופין:
-    # uvicorn.run(app, host=host, port=port, reload=reload, workers=workers, log_level=log_level)
